@@ -41,7 +41,7 @@ console.log("data",elevators);
   useEffect(() => {
     const fetchTrips = async () => {
       try {
-        const res = await adminApi.get(`${BASE_URL}/trips`);
+        const res = await adminApi.get(`${BASE_URL}/api/trips`);
 
         if (res.data) {
           setTrips(res.data);

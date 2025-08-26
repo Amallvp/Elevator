@@ -23,7 +23,7 @@ export default function ElevatorDetail({ id, elevator }) {
   const handleMove = async () => {
     if (selectedFloor === null) return;
     try {
-      const res = await adminApi.post(`${BASE_URL}/elevators/${id}/move`, {
+      const res = await adminApi.post(`${BASE_URL}/api/elevators/${id}/move`, {
         targetFloor: selectedFloor,
         occupancy_count: occupancy,
         load: weight,
@@ -36,7 +36,7 @@ export default function ElevatorDetail({ id, elevator }) {
 
   const handleStop = async () => {
     try {
-      const res = await adminApi.post(`${BASE_URL}/elevators/${id}/stop`);
+      const res = await adminApi.post(`${BASE_URL}/api/elevators/${id}/stop`);
 
       console.log(res.data);
     } catch (error) {
@@ -46,7 +46,7 @@ export default function ElevatorDetail({ id, elevator }) {
 
   const handleSart = async () => {
     try {
-      const res = await adminApi.post(`${BASE_URL}/elevators/${id}/start`);
+      const res = await adminApi.post(`${BASE_URL}/api/elevators/${id}/start`);
 
       console.log(res.data);
     } catch (error) {
@@ -61,7 +61,7 @@ export default function ElevatorDetail({ id, elevator }) {
         history?.door_state?.toUpperCase() === "CLOSED" ? "OPEN" : "CLOSED";
 
       const res = await adminApi.post(
-        `${BASE_URL}/elevators/${id}/door`,
+        `${BASE_URL}/api/elevators/${id}/door`,
         { action } // send action in payload
       );
 
@@ -92,7 +92,7 @@ export default function ElevatorDetail({ id, elevator }) {
     socket.emit("subscribe:elevator", id);
 
     // Load initial audit logs
-    adminApi.get(`${BASE_URL}/audit/${id}/log`).then((res) => {
+    adminApi.get(`${BASE_URL}/api/audit/${id}/log`).then((res) => {
       setAuditLogs(res.data);
     });
 

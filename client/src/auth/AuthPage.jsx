@@ -85,8 +85,7 @@ function LoginForm() {
 
     setLoading(true);
     try {
-      console.log(BASE_URL);
-      const response = await axios.post(`${BASE_URL}/auth/login`, {
+      const response = await axios.post(`${BASE_URL}/api/auth/login`, {
         email,
         password,
       });
@@ -183,9 +182,8 @@ function RegisterForm({ onSuccess }) {
 
     setLoading(true);
     try {
-      console.log(BASE_URL);
 
-      const response = await axios.post(`${BASE_URL}/auth/register`, {
+      const response = await axios.post(`${BASE_URL}/api/auth/register`, {
         email,
         password,
         role,
