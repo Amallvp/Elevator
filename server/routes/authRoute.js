@@ -17,10 +17,12 @@ r.post('/login', async (req, res, next) => {
   try {
     const { email, password } = req.body;
     const user = await User.findOne({ email });
+    console.log(user);
     if (!user) return res.status(401).json({ error: 'Invalid credentials' });
     const ok = await bcrypt.compare(password, user.password);
+    console.log(ok);
     if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
-    const token = jwt.sign({ uid: user._id, role: user.role, email }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '7d' });
+    const token = jwt.sign({ uid: user._id, role: user.role, email }, process.env.JWT_SECRET, { expiresIn:  '1h' });
     res.json({ token });
   } catch (e) { next(e); }
 });

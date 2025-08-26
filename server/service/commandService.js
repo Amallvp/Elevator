@@ -1,13 +1,13 @@
 import { Elevator } from "../models/elevator.js";
 import { Audit } from "../models/audit.js";
-import { emitToElevator } from "../config/socket.js";
+import { emitElevatorListUpdate, emitToElevator } from "../config/socket.js";
 import { Telemetry } from "../models/Telemetry.js";
+import { auditLog } from "../utils/auditLogger.js";
+import { Trip } from "../models/trip.js";
+import { parse } from "dotenv";
 
 export const CommandService = {
-
-
   async emergencyStop(elevatorId, user) {
-    // 1. Update telemetry to reflect emergency stop
     await Telemetry.updateOne(
       { elevatorId },
       {
@@ -21,76 +21,85 @@ export const CommandService = {
       }
     );
 
-    // 2. Emit command to physical/simulated elevator
-    emitToElevator(elevatorId, "command:stop", {});
-
-    // 3. Log in Audit
-    await Audit.create({
+    const newss = await Elevator.updateOne(
+      { elevatorId },
+      {
+        $set: {
+          "status.travel_direction": "IDLE",
+          "status.mode": "EMERGENCY_POWER",
+        },
+      }
+    );
+    emitElevatorListUpdate();
+    const audit = await auditLog({
       action: "COMMAND_STOP",
       elevatorId,
       payload: { reason: "Emergency stop triggered" },
-      ...user,
+      user,
     });
-
-    return { accepted: true, msg: "Emergency stop applied, brakes engaged" };
+    emitToElevator(elevatorId, "new:audit", audit);
+    return {
+      accepted: true,
+      msg: "Emergency stop applied, brakes engaged",
+      auditId: audit._id,
+    };
   },
 
+  async startElevator(elevatorId, user) {
+    await Telemetry.updateOne(
+      { elevatorId },
+      {
+        $set: {
+          velocity_mps: 0,
+          acceleration_mps2: 0,
+          travel_direction: "IDLE",
+          "safety.e_stop": false,
+          "safety.brake_status": "RELEASED",
+        },
+      }
+    );
 
-async startElevator(elevatorId, user) {
-  // 1. Reset safety state in Telemetry
-  await Telemetry.updateOne(
-    { elevatorId },
-    {
-      $set: {
-        velocity_mps: 0,
-        acceleration_mps2: 0,
-        travel_direction: "IDLE",
-        "safety.e_stop": false,
-        "safety.brake_status": "RELEASED",
-      },
-    }
-  );
+    // 2. Update Elevator snapshot
+    await Elevator.updateOne(
+      { elevatorId },
+      { $set: { "status.mode": "NORMAL", "status.travel_direction": "IDLE" } }
+    );
+    emitElevatorListUpdate();
+    const audit = await auditLog({
+      action: "COMMAND_START",
+      elevatorId,
+      payload: { reason: "Elevator Started Running" },
+      user,
+    });
+    emitToElevator(elevatorId, "new:audit", audit);
+    return {
+      accepted: true,
+      message: "Elevator started and ready",
+      auditId: audit._id,
+    };
+  },
 
-  // 2. Update Elevator snapshot
-  await Elevator.updateOne(
-    { elevatorId },
-    {
-      $set: {
-        "status.mode": "NORMAL",
-        "status.travel_direction": "IDLE",
-      },
-    }
-  );
-
-  // 3. Emit command (socket or MQTT)
-  emitToElevator(elevatorId, "command:start", {});
-
-  // 4. Audit log
-  await Audit.create({
-    action: "COMMAND_START",
-    elevatorId,
-    payload: {},
-    ...user,
-  });
-
-  return { accepted: true, message: "Elevator started and ready" };
-},
-
-  async moveToFloor(elevatorId, targetFloor, occupancy_count, user) {
+  async moveToFloor(elevatorId, targetFloor, occupancy_count, load, user) {
     const elevator = await Elevator.findOne({ elevatorId });
     if (!elevator) throw new Error("Elevator not found");
-
+    console.log("elevator", elevator);
     const last = await Telemetry.findOne({ elevatorId })
       .sort({ ts: -1 })
       .lean();
-    if (
-      !last ||
-      last.door_state !== "CLOSED" ||
-      !last?.safety?.door_interlock_ok ||
-      last?.safety?.e_stop
-    ) 
-    {
-      throw new Error("Safety interlock prevents motion");
+    if (!last) {
+      throw new Error("No telemetry data found for elevator");
+    }
+
+    if (last.door_state !== "CLOSED") {
+      throw new Error("Door is not closed", { cause: last });
+    }
+
+    if (!last?.safety?.door_interlock_ok) {
+      throw new Error("Door interlock not OK", { cause: last });
+    }
+
+    if (last?.safety?.e_stop) {
+      throw new Error("Emergency stop is active", { cause: last });
     }
 
     // 2. Decide direction
@@ -99,7 +108,15 @@ async startElevator(elevatorId, user) {
     if (targetFloor > currentFloor) direction = "UP";
     else if (targetFloor < currentFloor) direction = "DOWN";
 
-    await Elevator.updateOne(
+    // check oveload
+
+    console.log("elevator", elevator);
+
+    if (load > elevator.status.overload_Kg) {
+      throw new Error("Overload detected", { cause: last });
+    }
+
+    const result = await Elevator.updateOne(
       { elevatorId },
       {
         $set: {
@@ -107,58 +124,88 @@ async startElevator(elevatorId, user) {
           "status.mode": "NORMAL",
           "status.door_state": "CLOSED",
           "status.travel_direction": direction,
-          "status.occupancy_count": occupancy_count || 0,
+          "status.occupancy_count": occupancy_count,
+          "status.load_kg": load,
         },
       }
     );
 
-    // 2. Update telemetry → simulate brake release
-    await Telemetry.updateOne(
-      { elevatorId },
-      { $set: { "safety.brake_status": "RELEASED" } }
-    );
-
-    // 3. Emit command
-    emitToElevator(elevatorId, "command:move", { targetFloor });
-
-    // 4. Audit log
-    await Audit.create({
-      action: "COMMAND_MOVE",
-      elevatorId,
-      payload: { targetFloor },
-      ...user,
-    });
-
-    return { Accepted: true };
-  },
-
-
-  async doorCommand(elevatorId, action, actor) {
-    if (!["open", "close"].includes(action))
-      throw new Error("Invalid door action");
-
-    // 1. Update telemetry immediately
     await Telemetry.updateOne(
       { elevatorId },
       {
         $set: {
-         door_state: action === "open" ? "OPEN" : "CLOSED",
+          floor_index: targetFloor,
+          travel_direction: direction,
+          occupancy_count: occupancy_count ?? 0,
+          load_kg: load ?? 0,
         },
       }
     );
 
-    // 2. Emit door command
-    emitToElevator(elevatorId, "command:door", { action });
+    emitToElevator(elevatorId, "update:elevator", {
+      floor_index: targetFloor,
+      travel_direction: targetFloor > last.floor_index ? "UP" : "DOWN",
+      occupancy_count: occupancy_count ?? 0,
+      load_kg: load ?? 0,
+    });
+    emitElevatorListUpdate();
+    const audit = await auditLog({
+      action: "COMMAND_MOVE",
+      elevatorId,
+      payload: {
+        fromFloor: last.floor_index,
+        toFloor: targetFloor,
+      },
+      user,
+    });
+    emitToElevator(elevatorId, "new:audit", audit);
 
-    // 3. Audit log
-    await Audit.create({
+    const passengerOut = occupancy_count - elevator.status.occupancy_count;
+
+  await Trip.create({
+      elevatorId,
+      start_ts: new Date(),
+      stops: [currentFloor, targetFloor], // initial stop and target
+      passengers_in: occupancy_count ?? 0,
+      passengers_out: Math.abs(passengerOut)
+    });
+
+    return {
+      Accepted: true,
+      message: `Elevator moving to floor ${targetFloor}`,
+      auditId: audit._id,
+    };
+  },
+
+  async doorCommand(elevatorId, action, actor) {
+    if (!["OPEN", "CLOSED"].includes(action))
+      throw new Error("Invalid door action");
+
+    await Telemetry.updateOne(
+      { elevatorId },
+      { $set: { door_state: action === "OPEN" ? "OPEN" : "CLOSED" } }
+    );
+    await Elevator.updateOne(
+      { elevatorId },
+      {
+        $set: {
+          "status.door_state": action === "OPEN" ? "OPEN" : "CLOSED",
+          "status.travel_direction": "IDLE",
+        },
+      }
+    );
+    emitToElevator(elevatorId, "update:elevator", {
+      door_state: action,
+      travel_direction: "IDLE",
+    });
+    const audit = await auditLog({
       action: "COMMAND_DOOR",
       elevatorId,
       payload: { action },
-      ...actor,
+      user: actor,
     });
-
-    return { accepted: true, msg: `Door is ${action}` };
+    emitToElevator(elevatorId, "new:audit", audit);
+    return { accepted: true, msg: `Door is ${action}`, auditId: audit._id };
   },
 
   async updateSettings(elevatorId, patch, user) {
@@ -171,12 +218,13 @@ async startElevator(elevatorId, user) {
     if (Object.keys($set).length === 0)
       throw new Error("No RC fields provided");
     const result = await Elevator.updateOne({ elevatorId }, { $set });
-    const audit = await Audit.create({
+    const audit = await auditLog({
       action: "SETTINGS_UPDATED",
       elevatorId,
       payload: patch,
-      ...user,
+      user,
     });
+    emitToElevator(elevatorId, "new:audit", audit);
     emitToElevator(elevatorId, "settings:updated", patch);
     return { updated: true, result, audit };
   },

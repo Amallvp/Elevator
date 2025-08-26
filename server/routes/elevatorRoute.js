@@ -5,11 +5,10 @@ import { auth, requireRole } from '../middleware/auth.js';
 const r = Router();
 
 r.post('/', auth(), requireRole('ADMIN'), ElevatorController.create);
-r.get('/', auth(false), ElevatorController.elevatorList);
-r.get('/:id', auth(false), ElevatorController.get);
-r.get('/:id/status', auth(false), ElevatorController.getStatus);
-r.get('/:id/history', auth(false), ElevatorController.getHistory);
-r.get ('/:id/live', auth(false), ElevatorController.getLiveOccupancy);
+r.get('/', auth(), ElevatorController.elevatorList);
+r.get('/:id', auth(), ElevatorController.get);
+r.get('/:id/history', auth(), ElevatorController.getHistory);
+r.get ('/:id/live', auth(), ElevatorController.getLiveOccupancy);
 r.post('/:id/move', auth(), requireRole('OPERATOR','TECH','ADMIN'), ElevatorController.moveToFloor);
 r.post('/:id/stop', auth(), requireRole('OPERATOR','TECH','ADMIN'), ElevatorController.emergencyStop);
 r.post ('/:id/start', auth(), requireRole('OPERATOR','TECH','ADMIN'), ElevatorController.startElevator);

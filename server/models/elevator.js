@@ -27,6 +27,7 @@ const ElevatorSchema = new Schema({
     door_state: { type: String, enum: ['OPEN','CLOSING','CLOSED','OPENING','OBSTRUCTED'], default: 'CLOSED' },
     occupancy_count: { type: Number, default: 0 },
     load_kg: { type: Number, default: 0 },
+    overload_Kg : { type: Number, default: 0 },
     overload: { type: Boolean, default: false },
     motor_temp_C: Number,
     vfd_state: { type: String, enum: ['READY','RUN','FAULT','TRIP'], default: 'READY' },
@@ -73,7 +74,7 @@ const ElevatorSchema = new Schema({
 }, { timestamps: true });
 
 // Index for faster queries
-ElevatorSchema.index({ elevatorId: 1 });
+// ElevatorSchema.index({ elevatorId: 1 });
 
 /**
  * Auto-generate elevatorId like ELEV-001, ELEV-002, ...

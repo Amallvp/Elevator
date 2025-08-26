@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 const { Schema } = mongoose;   // ✅ this line fixes the error
 
 const TripSchema = new Schema({
-  elevator: { type: Schema.Types.ObjectId, ref: "Elevator", required: true, index: true },
+ elevatorId: { type: String, ref: "Elevator", required: true, index: true },
   start_ts: { type: Date, required: true },
   end_ts: { type: Date },
   stops: { type: [Number], default: [] },

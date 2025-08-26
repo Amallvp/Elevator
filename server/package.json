@@ -2,10 +2,10 @@
   "name": "iot-elevator-backend",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "server.js",
   "type": "module",
   "scripts": {
-    "dev": "nodemon --watch src --ext js,mjs,cjs,json --exec node src/server.js",
+    "dev": "nodemon --watch src --ext js,mjs,cjs,json --exec nodemon src/server.js",
     "start": "NODE_ENV=production node src/server.js",
     "seed": "node scripts/seed.js",
     "lint": "eslint ."

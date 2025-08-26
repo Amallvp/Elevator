@@ -2,16 +2,21 @@ import { Elevator } from "../models/elevator.js";
 import { Telemetry } from "../models/Telemetry.js";
 import { CommandService } from "../service/commandService.js";
 import createError from "http-errors";
+import { auditLog } from "../utils/auditLogger.js";
+import { emitToElevator } from "../config/socket.js";
+import { getElevatorList } from "../service/elevatorService.js";
+import { AuditService } from "../service/auditService.js";
 
 export async function create(req, res, next) {
   try {
-    const { elevatorId, building, shaft, settings, comms } = req.body;
+    const { elevatorId, building, shaft,status, settings, comms } = req.body;
 
     // 1. Create elevator
     const elevator = await Elevator.create({
       elevatorId, // "ELEV-001" or auto-generated
       building,
       shaft,
+      status,
       settings,
       comms,
     });
@@ -40,7 +45,14 @@ export async function create(req, res, next) {
       },
     });
 
-    res.status(201).json({ elevator, telemetry });
+    const audit = await auditLog({
+      action: "ELEVATOR_CREATED",
+      elevatorId: elevator.elevatorId,
+      payload: { elevatorId: elevator.elevatorId },
+      user: req.user,
+    });
+
+    res.status(201).json({ elevator, telemetry, auditId: audit._id });
   } catch (e) {
     if (e.code === 11000) {
       return next(createError(409, "Elevator ID already exists"));
@@ -48,20 +60,12 @@ export async function create(req, res, next) {
     next(e);
   }
 }
+
 export async function elevatorList(req, res, next) {
   try {
-    const rows = await Elevator.find(
-      {},
-      {
-        elevatorId: 1,
-        "status.floor_index": 1,
-        "status.door_state": 1,
-        "status.travel_direction": 1,
-        "status.occupancy_count": 1,
-        updatedAt: 1,
-      }
-    ).sort({ elevatorId: 1 });
-    res.json(rows);
+    const rows = await getElevatorList();
+    console.log("Elevator list fetched:", rows);
+    res.status(200).json(rows);
   } catch (e) {
     next(e);
   }
@@ -77,19 +81,13 @@ export async function get(req, res, next) {
   }
 }
 
-export async function getStatus(req, res, next) {
-  try {
-    const row = await Elevator.findOne(
-      { elevatorId: req.params.id },
-      { status: 1, settings: 1, usage: 1, building: 1, shaft: 1 }
-    );
+export async function getHistoryData({ id, limit = 500 }) {
+  const row = await Elevator.findOne({ elevatorId: id });
+  if (!row) throw new Error("Elevator not found");
 
-    console.log("Elevator status fetched:", row);
-    if (!row) return next(createError(404, "Elevator not found"));
-    res.json(row);
-  } catch (e) {
-    next(e);
-  }
+  return await Telemetry.find({ elevatorId: id })
+    .sort({ ts: -1 })
+    .limit(Number(limit));
 }
 
 export async function getHistory(req, res, next) {
@@ -100,7 +98,7 @@ export async function getHistory(req, res, next) {
     if (from) q.ts.$gte = new Date(from);
     if (to) q.ts.$lte = new Date(to);
     const rows = await Telemetry.find(q).sort({ ts: -1 }).limit(Number(limit));
-    res.json(rows);
+    res.json(rows, "Telemetry fetched");
   } catch (e) {
     next(e);
   }
@@ -131,18 +129,22 @@ export async function getLiveOccupancy(req, res, next) {
 
 export async function moveToFloor(req, res, next) {
   try {
-    const { targetFloor,occupancy_count } = req.body;
+    const row = await Elevator.findOne({ elevatorId: req.params.id });
+    if (!row) return next(createError(404, "Elevator not found"));
+
+    const { targetFloor, occupancy_count,load } = req.body;
     if (typeof targetFloor !== "number")
       return next(createError(400, "targetFloor required"));
     const user = {
-      uid: req.user.uid,
-      email: req.user.email,
-      role: req.user.role,
+      uid: req.user?.uid,
+      email: req.user?.email,
+      role: req.user?.role,
     };
     const result = await CommandService.moveToFloor(
       req.params.id,
       targetFloor,
       occupancy_count,
+      load,
       user
     );
     let response = {
@@ -158,12 +160,20 @@ export async function moveToFloor(req, res, next) {
 
 export async function emergencyStop(req, res, next) {
   try {
+    const row = await Elevator.findOne({ elevatorId: req.params.id });
+    if (!row) return next(createError(404, "Elevator not found"));
     const user = {
       uid: req.user.uid,
       email: req.user.email,
       role: req.user.role,
     };
     const result = await CommandService.emergencyStop(req.params.id, user);
+
+    const latestHistory = await getHistoryData({
+      id: req.params.id,
+      limit: 500,
+    });
+    emitToElevator(req.params.id, "update:elevator", latestHistory[0]);
     res.json(result);
   } catch (e) {
     next(e);
@@ -172,12 +182,20 @@ export async function emergencyStop(req, res, next) {
 
 export async function startElevator(req, res, next) {
   try {
+    const row = await Elevator.findOne({ elevatorId: req.params.id });
+    if (!row) return next(createError(404, "Elevator not found"));
     const user = {
       uid: req.user.uid,
       email: req.user.email,
       role: req.user.role,
     };
     const result = await CommandService.startElevator(req.params.id, user);
+    const latestHistory = await getHistoryData({
+      id: req.params.id,
+      limit: 500,
+    });
+    emitToElevator(req.params.id, "update:elevator", latestHistory[0]);
+
     res.json(result);
   } catch (e) {
     next(e);
@@ -186,6 +204,9 @@ export async function startElevator(req, res, next) {
 
 export async function doorCommand(req, res, next) {
   try {
+    const row = await Elevator.findOne({ elevatorId: req.params.id });
+    if (!row) return next(createError(404, "Elevator not found"));
+
     const { action } = req.body; // 'open' | 'close'
     const user = {
       uid: req.user.uid,
@@ -194,7 +215,7 @@ export async function doorCommand(req, res, next) {
     };
     const result = await CommandService.doorCommand(
       req.params.id,
-      action.toLowerCase(),
+      action,
       user
     );
     res.json(result);
@@ -216,6 +237,17 @@ export async function updateSettings(req, res, next) {
       patch,
       user
     );
+    res.json(result);
+  } catch (e) {
+    next(e);
+  }
+}
+
+export async function getAuditLog (req,res,next){
+  try {
+    const row = await Elevator.findOne({ elevatorId: req.params.id });
+    if (!row) return next(createError(404, "Elevator not found"));
+    const result = await AuditService.getAuditLog(req.params.id);
     res.json(result);
   } catch (e) {
     next(e);
